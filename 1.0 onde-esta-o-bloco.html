@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cadê o Bloco? — Protótipo (Mapa)</title>
+
+  <!-- Leaflet (mapa real). Se não carregar (sem internet/bloqueio), cai no modo mock automaticamente. -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    :root{
+      --bg:#0f0f0f; --card:#1e1e1e; --line:#2b2b2b;
+      --primary:#ffd700; --secondary:#8a2be2;
+      --success:#00ff7f; --danger:#ff4500; --muted:#9aa0a6;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:#fff}
+
+    .topbar{
+      display:flex; gap:10px; align-items:center;
+      padding:10px 12px; background:#000; border-bottom:1px solid var(--line);
+      position:sticky; top:0; z-index:9999;
+    }
+    .brand{font-weight:900; font-size:13px; white-space:nowrap}
+    .search{
+      flex:1; display:flex; gap:8px; align-items:center;
+      background:#151515; border:1px solid #2a2a2a;
+      padding:8px 10px; border-radius:999px;
+    }
+    .search input{width:100%; border:none; outline:none; background:transparent; color:#fff; font-size:13px}
+    .btn{
+      border:none; border-radius:10px; padding:8px 10px; font-weight:900; cursor:pointer;
+      background:var(--secondary); color:#fff;
+    }
+    .btn.secondary{background:#1b1b1b; border:1px solid #2a2a2a}
+
+    .wrap{display:grid; grid-template-rows: minmax(360px, 55vh) auto; min-height:calc(100vh - 52px)}
+    .mapShell{position:relative; border-bottom:1px solid var(--line); overflow:hidden}
+
+    #mapReal{position:absolute; inset:0; display:none}
+
+    #mapMock{
+      position:absolute; inset:0;
+      background:
+        radial-gradient(circle at 30% 20%, rgba(138,43,226,.18), transparent 45%),
+        radial-gradient(circle at 70% 60%, rgba(255,215,0,.10), transparent 40%),
+        linear-gradient(180deg, #121212, #0c0c0c);
+      display:none;
+    }
+    .grid{
+      position:absolute; inset:0;
+      background-image:
+        linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+      background-size:40px 40px; opacity:.35; pointer-events:none;
+    }
+
+    .legend{
+      position:absolute; left:12px; top:12px;
+      background:rgba(0,0,0,.55); border:1px solid #2a2a2a;
+      padding:8px 10px; border-radius:12px; font-size:11px;
+      backdrop-filter: blur(6px);
+      z-index:50;
+    }
+    .row{display:flex; gap:8px; align-items:center; margin:4px 0}
+    .dot{width:10px;height:10px;border-radius:50%}
+    .dot.live{background:var(--success); box-shadow:0 0 10px rgba(0,255,127,.65)}
+    .dot.scheduled{background:var(--muted)}
+    .dot.ended{background:var(--danger)}
+
+    .filters{
+      position:absolute; right:12px; top:12px;
+      width: 240px; max-width: calc(100vw - 24px);
+      display:flex; flex-direction:column; gap:8px;
+      z-index:50;
+    }
+    .filterCard{
+      background:rgba(0,0,0,.55); border:1px solid #2a2a2a;
+      padding:10px; border-radius:12px; backdrop-filter: blur(6px);
+    }
+    .filterTitle{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px}
+    .filterTitle b{font-size:12px}
+    .filterTitle small{color:#9aa0a6}
+    .chips{display:flex; flex-wrap:wrap; gap:6px}
+    .chip{
+      font-size:11px; padding:6px 8px; border-radius:999px;
+      background:#1a1a1a; border:1px solid #2a2a2a; color:#ddd;
+      cursor:pointer; user-select:none;
+    }
+    .chip.active{background:var(--secondary); border-color:var(--secondary); color:#fff}
+    .select{
+      width:100%; background:#1a1a1a; border:1px solid #2a2a2a; color:#fff;
+      border-radius:10px; padding:8px; font-size:12px; outline:none;
+    }
+    .note{font-size:10px; color:#a8a8a8; margin-top:6px; line-height:1.25}
+
+    .me{
+      position:absolute; left:52%; top:56%;
+      transform:translate(-50%,-50%);
+      width:14px;height:14px;border-radius:50%;
+      background:#2f81f7; border:2px solid #b8d6ff;
+      box-shadow:0 0 0 10px rgba(47,129,247,.18);
+      z-index:30;
+    }
+    .pin{
+      position:absolute; width:14px; height:14px; border-radius:50%;
+      transform:translate(-50%,-50%); border:2px solid rgba(0,0,0,.6);
+      cursor:pointer; z-index:25;
+    }
+    .pin.live{
+      background:var(--success);
+      box-shadow:0 0 12px rgba(0,255,127,.75);
+      animation:pulse 1.6s infinite;
+    }
+    @keyframes pulse{
+      0%{box-shadow:0 0 0 0 rgba(0,255,127,.35), 0 0 12px rgba(0,255,127,.75)}
+      70%{box-shadow:0 0 0 16px rgba(0,255,127,0), 0 0 12px rgba(0,255,127,.75)}
+      100%{box-shadow:0 0 0 0 rgba(0,255,127,0), 0 0 12px rgba(0,255,127,.75)}
+    }
+    .pin.scheduled{background:var(--muted); box-shadow:0 0 10px rgba(154,160,166,.25)}
+    .pin.ended{background:var(--danger); box-shadow:0 0 10px rgba(255,69,0,.25)}
+    .pinlabel{
+      position:absolute; top:-22px; left:50%; transform:translateX(-50%);
+      font-size:10px; padding:3px 7px; border-radius:999px;
+      background:rgba(0,0,0,.55); border:1px solid #2a2a2a;
+      white-space:nowrap; pointer-events:none;
+    }
+
+    .panel{padding:12px; background:#0b0b0b}
+    .listHead{display:flex; justify-content:space-between; align-items:flex-end; margin:8px 0}
+    .listHead strong{font-size:12px}
+    .listHead small{color:var(--muted)}
+    .item{
+      background:var(--card); border:1px solid #2a2a2a; border-radius:12px;
+      padding:12px; margin-bottom:10px; cursor:pointer;
+      display:flex; justify-content:space-between; gap:10px;
+    }
+    .item h4{margin:0 0 4px 0; font-size:13px}
+    .meta{margin:0; font-size:11px; color:#c8c8c8; line-height:1.25}
+    .tag{font-size:10px; padding:4px 7px; border-radius:999px; border:1px solid #2a2a2a; background:#111; white-space:nowrap}
+    .tag.live{color:var(--success); border-color:rgba(0,255,127,.35)}
+    .tag.scheduled{color:#d0d4d8; border-color:rgba(154,160,166,.35)}
+    .tag.ended{color:var(--danger); border-color:rgba(255,69,0,.35)}
+    .tag.low{color:var(--success)}
+    .tag.med{color:var(--primary)}
+    .tag.high{color:var(--danger)}
+    .tag.time{color:#cbd5e1; border-color:rgba(203,213,225,.25)}
+    .tag.time.live{color:rgba(0,255,127,.9); border-color:rgba(0,255,127,.25)}
+    .tag.time.ended{color:rgba(255,69,0,.9); border-color:rgba(255,69,0,.25)}
+
+    /* Bottom sheet */
+    .sheetBack{position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; z-index:20000}
+    .sheet{
+      position:fixed; left:0; right:0; bottom:-100%;
+      background:#0f0f0f; border-top:1px solid #2a2a2a;
+      border-radius:16px 16px 0 0; padding:12px 12px 18px 12px;
+      z-index:20001; transition:bottom .25s ease; max-height:78vh; overflow:auto;
+    }
+    .sheet.open{bottom:0}
+    .sheetBack.open{display:block}
+    .grab{width:42px;height:5px;border-radius:999px;background:#2a2a2a;margin:6px auto 10px}
+    .kvRow{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px}
+    .kv{flex:1; min-width:120px; background:#121212; border:1px solid #222; border-radius:12px; padding:10px}
+    .k{font-size:10px;color:#a8a8a8}
+    .v{font-size:14px;font-weight:900;margin-top:4px}
+    .lvl.low{color:var(--success)} .lvl.med{color:var(--primary)} .lvl.high{color:var(--danger)}
+    .actions{display:flex; gap:10px; margin-top:12px}
+    .btn2{flex:1; padding:12px; border-radius:12px; border:none; font-weight:900; cursor:pointer}
+    .go{background:var(--primary); color:#000}
+    .det{background:#1b1b1b; color:#fff; border:1px solid #2a2a2a}
+
+    /* Mode banner */
+    .modeBanner{
+      position:absolute; left:12px; bottom:12px;
+      background:rgba(0,0,0,.55); border:1px solid #2a2a2a;
+      padding:8px 10px; border-radius:12px; font-size:11px; color:#d0d4d8;
+      backdrop-filter: blur(6px);
+      z-index:50;
+    }
+    .modeBanner b{color:#fff}
+
+    /* "Me Leva" modal */
+    .modalBack{position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; z-index:30000}
+    .modal{
+      position:fixed; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      width:min(420px, calc(100vw - 24px));
+      background:#101010; border:1px solid #2a2a2a; border-radius:16px;
+      padding:12px; display:none; z-index:30001;
+    }
+    .modalHead{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px}
+    .modalHead h3{margin:0; font-size:14px}
+    .x{
+      border:none; background:#1b1b1b; color:#fff; border:1px solid #2a2a2a;
+      border-radius:10px; padding:8px 10px; cursor:pointer; font-weight:900;
+    }
+    .opt{
+      width:100%;
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      padding:12px; border-radius:12px; border:1px solid #2a2a2a;
+      background:#151515; color:#fff; cursor:pointer; font-weight:900;
+      margin-bottom:8px;
+    }
+    .opt small{color:#a8a8a8; font-weight:600}
+    .opt:hover{border-color:#3a3a3a}
+    .hint{font-size:11px; color:#a8a8a8; line-height:1.25; margin-top:6px}
+
+    .toast{
+      position:fixed; left:50%; bottom:18px; transform:translateX(-50%);
+      background:rgba(0,0,0,.72); border:1px solid #2a2a2a;
+      padding:10px 12px; border-radius:12px; font-size:12px;
+      display:none; z-index:40000; backdrop-filter: blur(6px);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="topbar">
+    <div class="brand">CADÊ O BLOCO?</div>
+    <div class="search">
+      🔎 <input id="q" placeholder="Buscar bloco (ex: Serasa)" />
+    </div>
+    <button class="btn" id="centerBtn" title="Centralizar em mim">📍 Eu</button>
+    <button class="btn secondary" id="toggleMode" title="Alternar modo (Real/Mock)">🗺️</button>
+  </div>
+
+  <div class="wrap">
+    <div class="mapShell" id="mapShell">
+      <div id="mapReal"></div>
+
+      <div id="mapMock">
+        <div class="grid"></div>
+        <div class="me" title="Você"></div>
+      </div>
+
+      <div class="legend">
+        <div class="row"><span class="dot live"></span><span>Ao vivo (GPS)</span></div>
+        <div class="row"><span class="dot scheduled"></span><span>Programado</span></div>
+        <div class="row"><span class="dot ended"></span><span>Encerrado</span></div>
+      </div>
+
+      <div class="filters">
+        <div class="filterCard">
+          <div class="filterTitle">
+            <div><b>Filtros (MVP)</b></div>
+            <small id="modeLabel">—</small>
+          </div>
+
+          <div style="margin-bottom:8px;">
+            <div style="font-size:10px;color:#a8a8a8;margin-bottom:6px;">Status</div>
+            <div class="chips" id="statusChips">
+              <div class="chip active" data-status="all">Todos</div>
+              <div class="chip" data-status="live">Ao vivo</div>
+              <div class="chip" data-status="scheduled">Programado</div>
+              <div class="chip" data-status="ended">Encerrado</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:8px;">
+            <div style="font-size:10px;color:#a8a8a8;margin-bottom:6px;">Proximidade</div>
+            <select class="select" id="radius">
+              <option value="999">Qualquer distância</option>
+              <option value="1">Até 1 km</option>
+              <option value="3" selected>Até 3 km</option>
+              <option value="5">Até 5 km</option>
+            </select>
+          </div>
+
+          <div>
+            <div style="font-size:10px;color:#a8a8a8;margin-bottom:6px;">Região</div>
+            <select class="select" id="region">
+              <option value="all" selected>Todas</option>
+              <option value="Centro">Centro</option>
+              <option value="Zona Oeste">Zona Oeste</option>
+              <option value="Zona Norte">Zona Norte</option>
+              <option value="Zona Sul">Zona Sul</option>
+              <option value="Zona Leste">Zona Leste</option>
+              <option value="Consolação">Consolação</option>
+              <option value="Casa Verde">Casa Verde</option>
+            </select>
+            <div class="note">Busca por nome do bloco já cobre muita intenção do usuário.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modeBanner" id="modeBanner"></div>
+    </div>
+
+    <div class="panel">
+      <div class="listHead">
+        <div>
+          <strong>Blocos próximos</strong><br>
+          <small>Ordenado por distância</small>
+        </div>
+        <small id="count">—</small>
+      </div>
+      <div id="items"></div>
+    </div>
+  </div>
+
+  <!-- Bottom sheet -->
+  <div class="sheetBack" id="sheetBack"></div>
+  <div class="sheet" id="sheet">
+    <div class="grab"></div>
+    <div id="sheetContent"></div>
+  </div>
+
+  <!-- Me Leva modal -->
+  <div class="modalBack" id="modalBack"></div>
+  <div class="modal" id="modal">
+    <div class="modalHead">
+      <h3 id="modalTitle">Me leva</h3>
+      <button class="x" id="modalClose">✕</button>
+    </div>
+
+    <button class="opt" id="optGmapsWalk">
+      <div>🚶‍♂️ Google Maps <small>(a pé)</small></div>
+      <div>›</div>
+    </button>
+
+    <button class="opt" id="optGmapsCar">
+      <div>🚗 Google Maps <small>(carro)</small></div>
+      <div>›</div>
+    </button>
+
+    <button class="opt" id="optWaze">
+      <div>🧭 Waze <small>(rota)</small></div>
+      <div>›</div>
+    </button>
+
+    <button class="opt" id="optUber">
+      <div>🚗 Uber <small>(abrir app)</small></div>
+      <div>›</div>
+    </button>
+
+    <button class="opt" id="opt99">
+      <div>🚕 99 <small>(abrir app)</small></div>
+      <div>›</div>
+    </button>
+
+    <div class="hint">
+      Se o app não abrir em ~1s, cai automaticamente para o Google Maps (rota).<br>
+      Em PC, normalmente abre no navegador.
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  /***********************
+   * Cadê o Bloco? — Protótipo (com horários)
+   * - Programado: início/fim
+   * - Ao vivo: "ao vivo desde" (opcional)
+   * - Encerrado: "encerrado às" (opcional)
+   ***********************/
+  const userLatLng = [-23.55052, -46.633308];
+
+  const blocks = [
+    {
+      id:1, name:"Bloco do Serasa 🎷", status:"live", region:"Consolação", distance:0.8, crowd:"high",
+      where:"Rua Augusta — Consolação", followers:12450,
+      startTime:"14:00", endTime:"18:00", liveSince:"15:10",
+      latlng:[-23.5539, -46.6522], mockPos:{x:58,y:48}
+    },
+    {
+      id:2, name:"Bloco Alegria da Sé 🥁", status:"scheduled", region:"Centro", distance:1.6, crowd:"med",
+      where:"Praça da Sé — Centro", followers:8200,
+      startTime:"13:00", endTime:"17:00",
+      latlng:[-23.5505, -46.6333], mockPos:{x:46,y:58}
+    },
+    {
+      id:3, name:"Bloco Casa Verde Folia 🎺", status:"live", region:"Casa Verde", distance:4.2, crowd:"med",
+      where:"Av. Casa Verde — Zona Norte", followers:5100,
+      startTime:"12:00", endTime:"16:00", liveSince:"12:25",
+      latlng:[-23.5099, -46.6571], mockPos:{x:78,y:34}
+    },
+    {
+      id:4, name:"Bloco Encerrados do Largo 🎭", status:"ended", region:"Centro", distance:2.1, crowd:"low",
+      where:"Largo do Arouche — Centro", followers:3900,
+      startTime:"10:00", endTime:"14:00", endedAt:"14:08",
+      latlng:[-23.5396, -46.6442], mockPos:{x:38,y:42}
+    },
+    {
+      id:5, name:"Bloco Pinheiros Groove 🎶", status:"scheduled", region:"Zona Oeste", distance:3.4, crowd:"low",
+      where:"Rua dos Pinheiros — Zona Oeste", followers:6400,
+      startTime:"15:00", endTime:"19:00",
+      latlng:[-23.5666, -46.6890], mockPos:{x:22,y:66}
+    },
+  ];
+
+  const qEl = document.getElementById("q");
+  const radiusEl = document.getElementById("radius");
+  const regionEl = document.getElementById("region");
+  const statusChips = document.getElementById("statusChips");
+  const itemsEl = document.getElementById("items");
+  const countEl = document.getElementById("count");
+
+  const sheetBack = document.getElementById("sheetBack");
+  const sheet = document.getElementById("sheet");
+  const sheetContent = document.getElementById("sheetContent");
+
+  const mapRealEl = document.getElementById("mapReal");
+  const mapMockEl = document.getElementById("mapMock");
+  const modeBanner = document.getElementById("modeBanner");
+  const modeLabel = document.getElementById("modeLabel");
+
+  const modalBack = document.getElementById("modalBack");
+  const modal = document.getElementById("modal");
+  const modalTitle = document.getElementById("modalTitle");
+  const modalClose = document.getElementById("modalClose");
+
+  const optGmapsWalk = document.getElementById("optGmapsWalk");
+  const optGmapsCar  = document.getElementById("optGmapsCar");
+  const optWaze      = document.getElementById("optWaze");
+  const optUber      = document.getElementById("optUber");
+  const opt99        = document.getElementById("opt99");
+
+  const toastEl = document.getElementById("toast");
+
+  let activeStatus = "all";
+  let map = null;
+  let leafletMarkers = [];
+  let selectedBlock = null;
+
+  function statusText(s){
+    if(s==="live") return {t:"Ao vivo (GPS)", cls:"live"};
+    if(s==="scheduled") return {t:"Programado", cls:"scheduled"};
+    return {t:"Encerrado", cls:"ended"};
+  }
+  function crowdText(c){
+    if(c==="low") return {t:"Baixa", cls:"low"};
+    if(c==="med") return {t:"Média", cls:"med"};
+    return {t:"Alta", cls:"high"};
+  }
+
+  // Horário: aparece ao lado do status (lista) e no sheet
+  function timeBadgeForBlock(b){
+    const start = b.startTime, end = b.endTime;
+    if(b.status === "scheduled" && start && end){
+      return { label: `${start}–${end}`, cls: "time" };
+    }
+    if(b.status === "live"){
+      if(b.liveSince) return { label: `desde ${b.liveSince}`, cls: "time live" };
+      if(start && end) return { label: `${start}–${end}`, cls: "time live" };
+      return { label: "agora", cls: "time live" };
+    }
+    if(b.status === "ended"){
+      if(b.endedAt) return { label: `enc. ${b.endedAt}`, cls: "time ended" };
+      if(start && end) return { label: `${start}–${end}`, cls: "time ended" };
+      return { label: "encerrado", cls: "time ended" };
+    }
+    return null;
+  }
+
+  // Toast
+  let toastTimer = null;
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.style.display = "block";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>toastEl.style.display="none", 1600);
+  }
+
+  // Bottom sheet
+  function openSheet(b){
+    selectedBlock = b;
+
+    const st = statusText(b.status);
+    const cr = crowdText(b.crowd);
+    const tb = timeBadgeForBlock(b);
+
+    const timeLine = tb ? `<div class="kv"><div class="k">Horário</div><div class="v">${tb.label}</div></div>` : "";
+
+    sheetContent.innerHTML = `
+      <h3 style="margin:0 0 6px 0">${b.name}</h3>
+      <small>${b.where} • ${b.distance.toFixed(1)} km • Região: ${b.region}</small>
+
+      <div class="kvRow">
+        <div class="kv"><div class="k">Status</div><div class="v">${st.t}</div></div>
+        ${timeLine}
+        <div class="kv"><div class="k">Lotação (estimativa)</div><div class="v"><span class="lvl ${cr.cls}">${cr.t}</span></div></div>
+        <div class="kv"><div class="k">Seguidores no app</div><div class="v">${b.followers.toLocaleString("pt-BR")}</div></div>
+      </div>
+
+      <div class="actions">
+        <button class="btn2 go" onclick="openMeLeva()">🚀 ME LEVA</button>
+        <button class="btn2 det" onclick="alert('(Protótipo) Detalhes do bloco: ${b.name.replace(/"/g,'')}')">📌 DETALHES</button>
+      </div>
+    `;
+    sheetBack.classList.add("open");
+    sheet.classList.add("open");
+  }
+  function closeSheet(){
+    sheet.classList.remove("open");
+    sheetBack.classList.remove("open");
+  }
+  sheetBack.addEventListener("click", closeSheet);
+
+  // Me Leva modal
+  function openMeLeva(){
+    if(!selectedBlock) return;
+    modalTitle.textContent = `Me leva — ${selectedBlock.name}`;
+    modalBack.style.display = "block";
+    modal.style.display = "block";
+  }
+  function closeMeLeva(){
+    modalBack.style.display = "none";
+    modal.style.display = "none";
+  }
+  modalClose.addEventListener("click", closeMeLeva);
+  modalBack.addEventListener("click", closeMeLeva);
+
+  // Open URL with fallback
+  function openUrlWithFallback(primaryUrl, fallbackUrl, label){
+    const start = Date.now();
+    let didHide = false;
+
+    const onHide = () => { didHide = true; cleanup(); };
+    const cleanup = () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("blur", onHide);
+    };
+
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("blur", onHide);
+
+    toast(`Abrindo ${label}...`);
+    window.location.href = primaryUrl;
+
+    setTimeout(() => {
+      const elapsed = Date.now() - start;
+      if(!didHide && elapsed >= 1000){
+        cleanup();
+        toast(`Não abriu. Indo para Google Maps...`);
+        window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+      }
+    }, 1100);
+  }
+
+  function buildLinksForBlock(b){
+    const [lat, lng] = b.latlng;
+    const gmapsWalk = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=walking`;
+    const gmapsCar  = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+    const wazeWeb   = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+    const uberWeb   = `https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[latitude]=${lat}&dropoff[longitude]=${lng}&dropoff[nickname]=${encodeURIComponent(b.name)}`;
+    const nineNineWeb = `https://www.99app.com/`;
+    return { gmapsWalk, gmapsCar, wazeWeb, uberWeb, nineNineWeb };
+  }
+
+  optGmapsWalk.addEventListener("click", ()=>{
+    if(!selectedBlock) return;
+    const links = buildLinksForBlock(selectedBlock);
+    window.open(links.gmapsWalk, "_blank", "noopener,noreferrer");
+    closeMeLeva();
+  });
+
+  optGmapsCar.addEventListener("click", ()=>{
+    if(!selectedBlock) return;
+    const links = buildLinksForBlock(selectedBlock);
+    window.open(links.gmapsCar, "_blank", "noopener,noreferrer");
+    closeMeLeva();
+  });
+
+  optWaze.addEventListener("click", ()=>{
+    if(!selectedBlock) return;
+    const links = buildLinksForBlock(selectedBlock);
+    closeMeLeva();
+    openUrlWithFallback(links.wazeWeb, links.gmapsCar, "Waze");
+  });
+
+  optUber.addEventListener("click", ()=>{
+    if(!selectedBlock) return;
+    const links = buildLinksForBlock(selectedBlock);
+    closeMeLeva();
+    openUrlWithFallback(links.uberWeb, links.gmapsCar, "Uber");
+  });
+
+  opt99.addEventListener("click", ()=>{
+    if(!selectedBlock) return;
+    const links = buildLinksForBlock(selectedBlock);
+    closeMeLeva();
+    openUrlWithFallback(links.nineNineWeb, links.gmapsCar, "99");
+  });
+
+  // Filtering
+  function applyFilters(){
+    const q = (qEl.value||"").trim().toLowerCase();
+    const radius = parseFloat(radiusEl.value);
+    const region = regionEl.value;
+
+    let list = blocks.slice();
+
+    if(activeStatus !== "all"){
+      list = list.filter(b => b.status === activeStatus);
+    }
+    if(!Number.isNaN(radius) && radius !== 999){
+      list = list.filter(b => b.distance <= radius);
+    }
+    if(region !== "all"){
+      list = list.filter(b => b.region === region);
+    }
+    if(q.length){
+      list = list.filter(b => b.name.toLowerCase().includes(q));
+    }
+
+    list.sort((a,b)=>a.distance-b.distance);
+
+    renderList(list);
+    renderMapPins(list);
+  }
+
+  // List rendering (status + horário do lado)
+  function renderList(list){
+    itemsEl.innerHTML = "";
+    countEl.textContent = `${list.length} exibidos`;
+
+    list.forEach(b=>{
+      const st = statusText(b.status);
+      const cr = crowdText(b.crowd);
+      const tb = timeBadgeForBlock(b);
+
+      const timeTagHtml = tb ? `<span class="tag ${tb.cls}">${tb.label}</span>` : "";
+
+      const el = document.createElement("div");
+      el.className = "item";
+      el.innerHTML = `
+        <div>
+          <h4>${b.name}</h4>
+          <p class="meta">📍 ${b.where}<br>📏 ${b.distance.toFixed(1)} km • Região: ${b.region}</p>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+          <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+            <span class="tag ${st.cls}">${st.t}</span>
+            ${timeTagHtml}
+          </div>
+          <span class="tag ${cr.cls}">Lotação: ${cr.t}</span>
+        </div>
+      `;
+      el.addEventListener("click", ()=>{
+        openSheet(b);
+        if(isRealMapActive() && map){
+          map.setView(b.latlng, Math.max(map.getZoom(), 14));
+        }
+      });
+      itemsEl.appendChild(el);
+    });
+  }
+
+  // Map pins
+  function isRealMapActive(){ return mapRealEl.style.display === "block"; }
+
+  function clearMockPins(){
+    mapMockEl.querySelectorAll(".pin").forEach(p=>p.remove());
+  }
+  function renderMockPins(list){
+    clearMockPins();
+    list.forEach(b=>{
+      const pin = document.createElement("div");
+      pin.className = `pin ${b.status}`;
+      pin.style.left = (b.mockPos?.x ?? 50) + "%";
+      pin.style.top = (b.mockPos?.y ?? 50) + "%";
+      pin.innerHTML = `<div class="pinlabel">${(b.name.split(" ")[0] || "Bloco")}</div>`;
+      pin.addEventListener("click", ()=>openSheet(b));
+      mapMockEl.appendChild(pin);
+    });
+  }
+
+  function makeLeafletIcon(status){
+    const cls = status === "live" ? "live" : (status === "scheduled" ? "scheduled" : "ended");
+    const html = `<div class="pin ${cls}" style="position:relative;transform:none"></div>`;
+    return L.divIcon({ className:"", html, iconSize:[14,14], iconAnchor:[7,7] });
+  }
+
+  function clearLeafletMarkers(){
+    if(!map) return;
+    leafletMarkers.forEach(m => map.removeLayer(m));
+    leafletMarkers = [];
+  }
+
+  function renderLeafletPins(list){
+    if(!map) return;
+    clearLeafletMarkers();
+
+    list.forEach(b=>{
+      const marker = L.marker(b.latlng, { icon: makeLeafletIcon(b.status) })
+        .addTo(map)
+        .on("click", ()=>openSheet(b));
+      leafletMarkers.push(marker);
+    });
+  }
+
+  function renderMapPins(list){
+    if(isRealMapActive()) renderLeafletPins(list);
+    else renderMockPins(list);
+  }
+
+  // Mode banner
+  function setModeBanner(text, badge){
+    modeBanner.innerHTML = `<b>${badge}:</b> ${text}`;
+  }
+
+  function activateMock(reason){
+    mapRealEl.style.display = "none";
+    mapMockEl.style.display = "block";
+    setModeBanner(reason || "Modo Mock (sem mapa real)", "MOCK");
+    modeLabel.textContent = "MOCK";
+  }
+
+  function tryInitRealMap(){
+    const leafletOk = (typeof L !== "undefined");
+    if(!leafletOk) return false;
+
+    mapRealEl.style.display = "block";
+    mapMockEl.style.display = "none";
+
+    if(!map){
+      map = L.map("mapReal", { zoomControl: true }).setView(userLatLng, 13);
+
+      const layer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap"
+      });
+
+      layer.on("tileerror", () => {
+        activateMock("Tiles do mapa bloqueados/sem internet → modo Mock");
+        applyFilters();
+      });
+
+      layer.addTo(map);
+
+      L.circleMarker(userLatLng, {
+        radius: 7, color:"#b8d6ff", weight:2, fillColor:"#2f81f7", fillOpacity:1
+      }).addTo(map).bindTooltip("Você", { permanent:false });
+    }
+
+    setModeBanner("Mapa real (OpenStreetMap)", "REAL");
+    modeLabel.textContent = "REAL";
+    return true;
+  }
+
+  document.getElementById("toggleMode").addEventListener("click", ()=>{
+    closeSheet(); closeMeLeva();
+    if(isRealMapActive()) activateMock("Modo Mock (alternado manualmente)");
+    else {
+      const ok = tryInitRealMap();
+      if(!ok) activateMock("Leaflet não carregou → modo Mock");
+      applyFilters();
+    }
+  });
+
+  document.getElementById("centerBtn").addEventListener("click", ()=>{
+    closeSheet(); closeMeLeva();
+    if(isRealMapActive() && map) map.setView(userLatLng, 14);
+    else toast("(Protótipo) Centralizar em você");
+  });
+
+  statusChips.querySelectorAll(".chip").forEach(ch=>{
+    ch.addEventListener("click", ()=>{
+      statusChips.querySelectorAll(".chip").forEach(x=>x.classList.remove("active"));
+      ch.classList.add("active");
+      activeStatus = ch.dataset.status;
+      applyFilters();
+    });
+  });
+
+  qEl.addEventListener("input", applyFilters);
+  radiusEl.addEventListener("change", applyFilters);
+  regionEl.addEventListener("change", applyFilters);
+
+  function init(){
+    const ok = tryInitRealMap();
+    if(!ok) activateMock("Sem internet/bloqueio → modo Mock");
+    applyFilters();
+  }
+  init();
+</script>
+</body>
+</html>
